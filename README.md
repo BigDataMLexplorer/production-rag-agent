@@ -108,17 +108,25 @@ This lets the project measure two common production failure modes:
 
 LangGraph is the primary workflow implementation because it exposes routing and multi-step orchestration explicitly. PydanticAI is included as a typed Python-native alternative rather than forcing both frameworks into the same execution path.
 
-## Next milestones
+## Current validation status
 
-- add Alembic migrations and DB integration tests
-- add ingestion API + background queue
-- add model-backed grounded answer generation
-- add confidence/abstention policy
-- add human-in-the-loop checkpointing
-- add OpenTelemetry traces
-- implement full evaluation runner and charts
-- add prompt-injection test cases
-- create portfolio screenshots and architecture visual
+Implemented and covered by CI or executable tests:
+
+- schema migrations and PostgreSQL/pgvector integration testing
+- tenant-scoped hybrid retrieval with current-version preference
+- ingestion, grounded generation, citation validation and abstention
+- LangGraph human-review workflow
+- prompt-injection guardrail contracts
+- OpenTelemetry instrumentation
+- evaluation runner and chart generation
+- portfolio demo UI
+
+Remaining before the project is presented as a finished portfolio case study:
+
+- run the full seeded evaluation and publish measured retrieval results
+- capture final demo, evaluation and trace screenshots
+- add a short architecture walkthrough / Loom
+- optionally deploy the demo to AWS
 
 ## Model-backed generation
 
