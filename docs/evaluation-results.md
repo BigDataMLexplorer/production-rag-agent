@@ -4,48 +4,60 @@ This page records measured retrieval results from the synthetic multi-tenant ben
 
 ## Benchmark setup
 
-- **CI run:** GitHub Actions run #12
-- **Code commit:** `ba3cf54463b8278d3c272d3d0083ce43f78a7a39`
-- **Dataset:** 23 synthetic policy questions across two tenants
+- **CI run:** GitHub Actions run #19
+- **Code commit:** `b4e9395bee7f800b19cf836e442b30dede1bb758`
+- **Dataset:** 34 synthetic policy questions across two tenants
+- **Query categories:** 21 semantic, 11 exact-reference-ID, 2 ambiguous
 - **Corpus:** 18 synthetic document versions, including superseded/current policies and cross-tenant lookalikes
 - **Embeddings:** `sentence-transformers/all-MiniLM-L6-v2`
 - **Reranker:** `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - **Database:** PostgreSQL + pgvector
-- **Hybrid retrieval:** pgvector semantic candidates + PostgreSQL full-text candidates combined with Reciprocal Rank Fusion
-- **Version handling:** both first-stage retrieval variants prioritize current document versions
+- **Hybrid retrieval:** pgvector semantic candidates + PostgreSQL full-text candidates combined with query-adaptive weighted Reciprocal Rank Fusion
+- **Version handling:** current versions are prioritized in first-stage retrieval and cannot be silently displaced by a stale version during reranking
 - **Latency:** warm steady-state retrieval latency on a GitHub-hosted runner; one-time model loading is excluded
 
-## Results
+## Aggregate results
 
-| Pipeline | Hit@1 | Hit@3 | MRR | Expected current version at rank 1 | Cross-tenant leakage | p50 latency | p95 latency |
+| Pipeline | Hit@1 | Hit@3 | MRR | Current version at rank 1 | Cross-tenant leakage | p50 | p95 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Vector | 95.65% | 100% | 0.9783 | 95.65% | 0 | 10.2 ms | 11.6 ms |
-| Hybrid | 95.65% | 100% | 0.9783 | 95.65% | 0 | 10.1 ms | 11.8 ms |
-| Hybrid + reranker | **100%** | **100%** | **1.0000** | **100%** | **0** | 97.1 ms | 104.2 ms |
+| Vector | 94.12% | 94.12% | 0.9520 | 94.12% | 0 | 12.2 ms | 16.2 ms |
+| Keyword | 94.12% | 100% | 0.9706 | 94.12% | 0 | 0.9 ms | 1.7 ms |
+| Adaptive hybrid | **97.06%** | **100%** | **0.9853** | **97.06%** | **0** | 12.0 ms | 19.1 ms |
+| Hybrid + reranker | **100%** | **100%** | **1.0000** | **100%** | **0** | 89.2 ms | 109.9 ms |
 
-The reranker corrected the only top-1 retrieval error in the 23-question set, improving Hit@1 by **4.35 percentage points** and MRR from **0.9783 to 1.0000**. The trade-off was roughly **+87 ms p50 retrieval latency** on this runner.
+## Why the hybrid result matters
 
-## Failure analysis
+The baselines fail on different query types:
 
-The difficult query was:
+| Category | Vector Hit@1 | Keyword Hit@1 | Hybrid Hit@1 | Hybrid + reranker |
+| --- | ---: | ---: | ---: | ---: |
+| Semantic | **100%** | 90.48% | **100%** | **100%** |
+| Exact reference ID | 81.82% | **100%** | 90.91% | **100%** |
+| Ambiguous | **100%** | **100%** | **100%** | **100%** |
 
-> How long are application logs kept by default?
+Vector retrieval is strongest on paraphrased semantic questions, while PostgreSQL full-text search is strongest on exact enterprise-style identifiers such as `RET90A` and `BKP35A`.
 
-Both vector-only and hybrid first-stage retrieval ranked **Security Audit Logging Policy** above **Data Retention Policy** because both documents strongly overlap on “logs” and “retention”.
+A single static fusion weight was tested first and performed worse than vector-only because lexical overlap could overpower strong semantic matches. The final implementation therefore uses **query-adaptive weighted RRF**:
 
-The expected answer lived in the current `2026-10` Data Retention Policy. The cross-encoder reranker moved that document to rank 1, resolving the semantic ambiguity.
+- natural-language questions remain semantic-first,
+- queries containing strong alphanumeric reference identifiers become lexical-first.
 
-This is intentionally kept as a visible failure rather than tuning the benchmark until every baseline scores 100%.
+This raised overall Hit@1 from **94.12% vector-only to 97.06% hybrid**, while preserving 100% Hit@1 on the semantic subset.
 
-## What these numbers do — and do not — mean
+## Reranker and document versions
 
-These results validate the behavior of this **small synthetic benchmark**. They do not establish production accuracy on arbitrary enterprise documents.
+A separate failure discovered during evaluation was a cross-encoder reranker promoting a highly similar **superseded** backup policy above its current version. The reranker now preserves current-version priority unless a future explicit historical-search mode is requested.
 
-In particular:
+With that constraint, hybrid + reranking achieved **100% Hit@1 and MRR 1.0000** on the 34 checked-in cases.
 
-- zero tenant leakage here means none of the retrieved results crossed tenant boundaries in these benchmark cases; it is not a general security certification,
-- the latency numbers cover retrieval and reranking, not full LLM generation,
+## Limitations
+
+These results validate this small synthetic benchmark, not arbitrary production accuracy.
+
+- zero tenant leakage here means no retrieved result crossed tenant boundaries in these test cases; it is not a security certification,
+- the latency values cover retrieval/reranking, not full LLM generation,
 - GitHub-hosted runner performance is not a production SLA,
-- the benchmark is designed as reproducible engineering evidence for a portfolio project, not as a claim of state-of-the-art RAG performance.
+- reference-ID cases are intentionally included because exact identifiers are a common enterprise retrieval workload,
+- the benchmark and retrieval logic remain checked into the repository so results can be reproduced rather than treated as marketing claims.
 
-The raw JSON and generated chart are also produced as the `retrieval-evaluation` artifact by the CI evaluation job.
+The raw JSON, chart and live demo screenshot are produced as the `retrieval-evaluation` artifact by CI.

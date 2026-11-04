@@ -21,9 +21,7 @@ The goal is to demonstrate more than a "chat with PDF" demo. The system focuses 
 
 See [`docs/architecture.md`](docs/architecture.md).
 
-## Current milestone
-
-Current implementation:
+## Current implementation
 
 - FastAPI service with `/chat`, `/retrieve`, `/documents/ingest`, `/tenants`, and `/health` endpoints
 - lightweight demo UI at `/demo` for portfolio screenshots
@@ -32,9 +30,9 @@ Current implementation:
 - HNSW vector index + generated PostgreSQL `tsvector`/GIN index
 - tenant / document / version / chunk / tool-execution data model
 - local SentenceTransformers embeddings
-- vector-only retrieval
-- PostgreSQL full-text + vector hybrid retrieval with RRF
-- current-document version priority
+- vector-only and keyword-only baselines
+- query-adaptive PostgreSQL full-text + pgvector hybrid retrieval with weighted RRF
+- current-document version priority preserved through reranking
 - cross-encoder reranking
 - LangGraph RAG workflow
 - structured model-backed grounded generation through PydanticAI (when `LLM_MODEL` is configured)
@@ -47,8 +45,8 @@ Current implementation:
 - PDF, DOCX, Markdown and text parsers
 - upload-driven ingestion with explicit document versions and current-version promotion
 - synthetic multi-tenant dataset with deliberately stale document versions
-- retrieval evaluation runner comparing vector-only, hybrid, and hybrid + reranker
-- retrieval evaluation primitives and contract tests
+- retrieval evaluation split into semantic, exact-identifier and ambiguous query categories
+- live browser screenshot captured from the running FastAPI demo in CI
 
 ## Quick start
 
@@ -65,14 +63,6 @@ uvicorn app.main:app --reload
 
 Then open `http://localhost:8000/docs` for the API or `http://localhost:8000/demo` for the portfolio demo UI.
 
-The Swagger UI exposes ingestion, retrieval, standard chat, and reviewable human-in-the-loop chat APIs, so the complete demo can be exercised without a custom frontend.
-
-The seed script prints tenant UUIDs. Use one in `POST /chat`.
-
-## Observability
-
-The API is instrumented with OpenTelemetry. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces to any OTLP-compatible backend, or set `OTEL_CONSOLE_EXPORTER=true` for local trace output. Retrieval spans include tenant and top-k metadata, but not raw document content.
-
 ## Run tests
 
 ```bash
@@ -88,19 +78,27 @@ PYTHONPATH=src python scripts/run_retrieval_evaluation.py
 PYTHONPATH=src python scripts/plot_retrieval_evaluation.py
 ```
 
-The evaluation writes measured results to `artifacts/retrieval_evaluation.json`. These metrics are intentionally generated at runtime; the repository does not ship with fabricated benchmark numbers.
-
 ### Measured retrieval result
 
-On the checked-in 23-question synthetic benchmark:
+On the checked-in **34-question** synthetic benchmark:
 
-| Pipeline | Hit@1 | MRR | p50 latency | p95 latency |
-| --- | ---: | ---: | ---: | ---: |
-| Vector | 95.65% | 0.9783 | 10.2 ms | 11.6 ms |
-| Hybrid | 95.65% | 0.9783 | 10.1 ms | 11.8 ms |
-| Hybrid + reranker | **100%** | **1.0000** | 97.1 ms | 104.2 ms |
+| Pipeline | Hit@1 | Hit@3 | MRR | p50 latency | p95 latency |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Vector | 94.12% | 94.12% | 0.9520 | 12.2 ms | 16.2 ms |
+| Keyword | 94.12% | 100% | 0.9706 | 0.9 ms | 1.7 ms |
+| Adaptive hybrid | **97.06%** | **100%** | **0.9853** | 12.0 ms | 19.1 ms |
+| Hybrid + reranker | **100%** | **100%** | **1.0000** | 89.2 ms | 109.9 ms |
 
-All three pipelines achieved Hit@3 = 100% and zero cross-tenant leakage in the benchmark. The reranker corrected the only top-1 ambiguity failure. See [`docs/evaluation-results.md`](docs/evaluation-results.md) for the methodology, limitations and failure analysis.
+All four pipelines produced **zero cross-tenant leakage** in the benchmark.
+
+The category split explains why hybrid search helps:
+
+- semantic questions: vector **100% Hit@1**, keyword **90.48%**
+- exact-reference-ID questions: vector **81.82%**, keyword **100%**
+- adaptive hybrid keeps **100%** on semantic questions while improving exact-ID retrieval to **90.91%**
+- the cross-encoder reranker reaches **100% Hit@1 in every benchmark category**
+
+See [`docs/evaluation-results.md`](docs/evaluation-results.md) for methodology, failure analysis and limitations.
 
 ## Synthetic versioning scenario
 
@@ -111,39 +109,13 @@ Acme Cloud has two versions of the same data-retention policy:
 
 Northstar Analytics has a different tenant-only policy. Retrieval must not leak it into Acme responses.
 
-This lets the project measure two common production failure modes:
-
-1. stale-document retrieval
-2. cross-tenant leakage
-
 ## LangGraph vs. PydanticAI
 
 LangGraph is the primary workflow implementation because it exposes routing and multi-step orchestration explicitly. PydanticAI is included as a typed Python-native alternative rather than forcing both frameworks into the same execution path.
 
-## Current validation status
-
-Implemented and covered by CI or executable tests:
-
-- schema migrations and PostgreSQL/pgvector integration testing
-- tenant-scoped hybrid retrieval with current-version preference
-- ingestion, grounded generation, citation validation and abstention
-- LangGraph human-review workflow
-- prompt-injection guardrail contracts
-- OpenTelemetry instrumentation
-- evaluation runner and chart generation
-- portfolio demo UI
-
-Remaining before the project is presented as a finished portfolio case study:
-
-- capture final demo, evaluation and trace screenshots
-- add a short architecture walkthrough / Loom
-- optionally deploy the demo to AWS
-
 ## Model-backed generation
 
-Set `LLM_MODEL` to any PydanticAI-supported model identifier. For example, an AWS Bedrock model can be configured with a `bedrock:` model identifier. If no model is configured, the project intentionally falls back to a deterministic extractive demo generator so retrieval can still be exercised without paid API access.
-
-The model returns structured answer text, cited chunk IDs, confidence and an escalation flag. Citations are validated against the retrieved context before an answer is exposed.
+Set `LLM_MODEL` to any PydanticAI-supported model identifier. If no model is configured, the project intentionally falls back to a deterministic extractive demo generator so retrieval can still be exercised without paid API access.
 
 ## Human-in-the-loop
 
