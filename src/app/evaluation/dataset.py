@@ -9,6 +9,7 @@ class RetrievalCase(BaseModel):
     question: str
     expected_document_external_id: str
     expected_version: str
+    category: str = "semantic"
 
 
 def load_cases(path: Path) -> list[RetrievalCase]:

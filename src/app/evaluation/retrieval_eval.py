@@ -14,7 +14,7 @@ from app.evaluation.metrics import hit_at_k, mean, reciprocal_rank
 from app.retrieval.embeddings import embed_query
 from app.retrieval.rerank import get_reranker, rerank
 from app.retrieval.schemas import RetrievedChunk
-from app.retrieval.search import hybrid_search, vector_search
+from app.retrieval.search import hybrid_search, keyword_search, vector_search
 
 
 @dataclass
@@ -32,6 +32,7 @@ class CaseResult:
     current_version_correct: float
     tenant_leakage_count: int
     latency_ms: float
+    category: str = "semantic"
 
 
 @dataclass
@@ -46,6 +47,15 @@ class ModeSummary:
     mean_latency_ms: float
     p50_latency_ms: float
     p95_latency_ms: float
+
+
+@dataclass
+class CategorySummary:
+    mode: str
+    category: str
+    cases: int
+    hit_at_1: float
+    mrr: float
 
 
 def _identity(chunk: RetrievedChunk) -> str:
@@ -64,6 +74,8 @@ def _run_mode(
 
     if mode == "vector":
         chunks = vector_search(db, tenant_id=tenant.id, query=case.question, top_k=settings.rag_top_k)
+    elif mode == "keyword":
+        chunks = keyword_search(db, tenant_id=tenant.id, query=case.question, top_k=settings.rag_top_k)
     elif mode == "hybrid":
         chunks = hybrid_search(db, tenant_id=tenant.id, query=case.question, top_k=settings.rag_top_k)
     elif mode == "hybrid_rerank":
@@ -97,6 +109,7 @@ def _run_mode(
         current_version_correct=float(bool(top) and top.document_version == case.expected_version),
         tenant_leakage_count=leakage,
         latency_ms=latency_ms,
+        category=case.category,
     )
 
 
@@ -109,8 +122,8 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 
 def _warm_up_models(modes: tuple[str, ...]) -> None:
-    # Exclude one-time model loading from steady-state request latency.
-    embed_query("benchmark warmup")
+    if any(mode in modes for mode in ("vector", "hybrid", "hybrid_rerank")):
+        embed_query("benchmark warmup")
     if "hybrid_rerank" in modes:
         get_reranker().predict([("benchmark warmup", "benchmark warmup")])
 
@@ -118,7 +131,7 @@ def _warm_up_models(modes: tuple[str, ...]) -> None:
 def run_retrieval_evaluation(
     db: Session,
     dataset_path: Path,
-    modes: tuple[str, ...] = ("vector", "hybrid", "hybrid_rerank"),
+    modes: tuple[str, ...] = ("vector", "keyword", "hybrid", "hybrid_rerank"),
 ) -> tuple[list[CaseResult], list[ModeSummary]]:
     cases = load_cases(dataset_path)
     _warm_up_models(modes)
@@ -155,7 +168,25 @@ def run_retrieval_evaluation(
 
 
 def serialize_results(results: list[CaseResult], summaries: list[ModeSummary]) -> dict:
+    category_summary: list[CategorySummary] = []
+    modes = sorted({item.mode for item in results})
+    categories = sorted({item.category for item in results})
+    for mode in modes:
+        for category in categories:
+            sub = [item for item in results if item.mode == mode and item.category == category]
+            if not sub:
+                continue
+            category_summary.append(
+                CategorySummary(
+                    mode=mode,
+                    category=category,
+                    cases=len(sub),
+                    hit_at_1=mean([item.hit_at_1 for item in sub]),
+                    mrr=mean([item.mrr for item in sub]),
+                )
+            )
     return {
         "cases": [asdict(item) for item in results],
         "summary": [asdict(item) for item in summaries],
+        "category_summary": [asdict(item) for item in category_summary],
     }
