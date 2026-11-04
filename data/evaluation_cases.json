@@ -1,0 +1,5 @@
+[
+  {"tenant":"acme","question":"How long are application logs retained by default?","expected_document_external_id":"data-retention-policy","expected_version":"2026-10"},
+  {"tenant":"acme","question":"How long are backup snapshots retained now?","expected_document_external_id":"data-retention-policy","expected_version":"2026-10"},
+  {"tenant":"northstar","question":"How long is customer event data retained?","expected_document_external_id":"data-retention-policy","expected_version":"2026-09"}
+]
