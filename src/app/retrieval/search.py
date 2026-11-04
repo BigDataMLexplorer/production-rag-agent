@@ -11,14 +11,14 @@ from app.retrieval.embeddings import embed_query
 from app.retrieval.schemas import RetrievedChunk
 
 RRF_K = 60.0
-VECTOR_WEIGHT = 1.0
-KEYWORD_WEIGHT = 1.25
-
 _STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "do", "does", "for",
     "from", "how", "i", "in", "is", "it", "of", "on", "or", "our", "the",
     "to", "under", "we", "what", "when", "which", "who", "with",
 }
+_STRONG_IDENTIFIER = re.compile(
+    r"\b(?=[A-Z0-9_]{5,}\b)(?=[A-Z0-9_]*[A-Z]{2})(?=[A-Z0-9_]*\d{2})[A-Z0-9_]+\b"
+)
 
 
 def _row_to_chunk(row) -> RetrievedChunk:
@@ -41,15 +41,22 @@ def _row_to_chunk(row) -> RetrievedChunk:
 
 
 def build_keyword_query(query: str) -> str:
-    """Build a broad lexical query for first-stage candidate generation.
-
-    websearch_to_tsquery joins plain words with AND. That is often too restrictive
-    for natural-language questions, so candidate generation uses OR over meaningful
-    sanitized tokens and lets ts_rank_cd + fusion perform the ranking.
-    """
+    """Build a broad lexical query for first-stage candidate generation."""
     tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9_]*", query)
     filtered = [token for token in tokens if token.lower() not in _STOPWORDS and len(token) > 1]
     return " OR ".join(filtered) if filtered else query
+
+
+def fusion_weights(query: str) -> tuple[float, float]:
+    """Choose semantic/lexical RRF weights from query shape.
+
+    Exact enterprise identifiers benefit from lexical matching. Natural-language
+    questions remain semantic-first so noisy token overlap cannot overpower a
+    strong embedding match.
+    """
+    if _STRONG_IDENTIFIER.search(query):
+        return 0.75, 1.50
+    return 1.00, 0.70
 
 
 def vector_search(db: Session, *, tenant_id: UUID, query: str, top_k: int = 8) -> list[RetrievedChunk]:
@@ -94,8 +101,7 @@ def keyword_search(db: Session, *, tenant_id: UUID, query: str, top_k: int = 8) 
         JOIN document_versions dv ON dv.id=c.version_id
         WHERE c.tenant_id=:tenant_id
           AND c.search_vector @@ websearch_to_tsquery('english', :keyword_query)
-        ORDER BY CASE WHEN dv.is_current THEN 0 ELSE 1 END,
-                 score DESC
+        ORDER BY CASE WHEN dv.is_current THEN 0 ELSE 1 END, score DESC
         LIMIT :top_k
     """)
     return [
@@ -109,11 +115,12 @@ def keyword_search(db: Session, *, tenant_id: UUID, query: str, top_k: int = 8) 
 
 def hybrid_search(db: Session, *, tenant_id: UUID, query: str, top_k: int = 8) -> list[RetrievedChunk]:
     keyword_query = build_keyword_query(query)
+    vector_weight, keyword_weight = fusion_weights(query)
     with tracer.start_as_current_span("retrieval.hybrid") as span:
         span.set_attribute("rag.tenant_id", str(tenant_id))
         span.set_attribute("rag.top_k", top_k)
-        span.set_attribute("rag.vector_weight", VECTOR_WEIGHT)
-        span.set_attribute("rag.keyword_weight", KEYWORD_WEIGHT)
+        span.set_attribute("rag.vector_weight", vector_weight)
+        span.set_attribute("rag.keyword_weight", keyword_weight)
         embedding = embed_query(query)
 
     sql = text("""
@@ -190,7 +197,7 @@ def hybrid_search(db: Session, *, tenant_id: UUID, query: str, top_k: int = 8) -
         "candidate_k": max(top_k * 4, 20),
         "top_k": top_k,
         "rrf_k": RRF_K,
-        "vector_weight": VECTOR_WEIGHT,
-        "keyword_weight": KEYWORD_WEIGHT,
+        "vector_weight": vector_weight,
+        "keyword_weight": keyword_weight,
     }
     return [_row_to_chunk(row) for row in db.execute(sql, params)]
