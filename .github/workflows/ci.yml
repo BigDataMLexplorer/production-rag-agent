@@ -85,6 +85,34 @@ jobs:
         run: PYTHONPATH=src python scripts/run_retrieval_evaluation.py
       - name: Build evaluation chart
         run: PYTHONPATH=src python scripts/plot_retrieval_evaluation.py
+      - name: Install browser for live demo capture
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Start demo API
+        run: |
+          PYTHONPATH=src uvicorn app.main:app --host 127.0.0.1 --port 8000 >/tmp/rag-api.log 2>&1 &
+          echo $! >/tmp/rag-api.pid
+          python - <<'PY'
+          import time
+          import urllib.request
+          for _ in range(60):
+              try:
+                  with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2) as response:
+                      if response.status == 200:
+                          break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise SystemExit("API did not become healthy")
+          PY
+      - name: Capture live demo screenshot
+        run: PYTHONPATH=src python scripts/capture_demo_screenshot.py
+      - name: Stop demo API
+        if: always()
+        run: |
+          if [ -f /tmp/rag-api.pid ]; then kill "$(cat /tmp/rag-api.pid)" || true; fi
+          if [ -f /tmp/rag-api.log ]; then tail -n 100 /tmp/rag-api.log; fi
       - name: Upload measured evaluation artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -92,3 +120,4 @@ jobs:
           path: |
             artifacts/retrieval_evaluation.json
             artifacts/retrieval_quality.png
+            artifacts/demo_chat.png
