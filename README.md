@@ -23,7 +23,7 @@ See [`docs/architecture.md`](docs/architecture.md).
 
 ## Current milestone
 
-Implemented in the initial scaffold:
+Current implementation:
 
 - FastAPI service with `/chat`, `/retrieve`, `/documents/ingest`, `/tenants`, and `/health` endpoints
 - lightweight demo UI at `/demo` for portfolio screenshots
@@ -90,6 +90,18 @@ PYTHONPATH=src python scripts/plot_retrieval_evaluation.py
 
 The evaluation writes measured results to `artifacts/retrieval_evaluation.json`. These metrics are intentionally generated at runtime; the repository does not ship with fabricated benchmark numbers.
 
+### Measured retrieval result
+
+On the checked-in 23-question synthetic benchmark:
+
+| Pipeline | Hit@1 | MRR | p50 latency | p95 latency |
+| --- | ---: | ---: | ---: | ---: |
+| Vector | 95.65% | 0.9783 | 10.2 ms | 11.6 ms |
+| Hybrid | 95.65% | 0.9783 | 10.1 ms | 11.8 ms |
+| Hybrid + reranker | **100%** | **1.0000** | 97.1 ms | 104.2 ms |
+
+All three pipelines achieved Hit@3 = 100% and zero cross-tenant leakage in the benchmark. The reranker corrected the only top-1 ambiguity failure. See [`docs/evaluation-results.md`](docs/evaluation-results.md) for the methodology, limitations and failure analysis.
+
 ## Synthetic versioning scenario
 
 Acme Cloud has two versions of the same data-retention policy:
@@ -123,7 +135,6 @@ Implemented and covered by CI or executable tests:
 
 Remaining before the project is presented as a finished portfolio case study:
 
-- run the full seeded evaluation and publish measured retrieval results
 - capture final demo, evaluation and trace screenshots
 - add a short architecture walkthrough / Loom
 - optionally deploy the demo to AWS
